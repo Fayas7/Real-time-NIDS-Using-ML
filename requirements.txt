@@ -1,0 +1,9 @@
+fastapi==0.95.0          # FastAPI framework for building APIs
+uvicorn==0.22.0         # ASGI server for running FastAPI applications
+pydantic==1.10.0        # Data validation and settings management
+scikit-learn==1.2.0     # Machine learning library
+joblib==1.2.0           # For saving and loading models
+numpy==1.24.0           # Numerical operations
+pandas==1.5.3           # Data manipulation and analysis
+seaborn==0.12.2         # Statistical data visualization (if used in EDA)
+matplotlib==3.6.2       # Plotting library (if used in EDA)
