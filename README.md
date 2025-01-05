@@ -1,8 +1,8 @@
 PROJECT: REAL TIME NETWORK INTRUSION DETECTION USING MACHINE LEARNING
 
 
-view in raw  format to understand the classification
 
+![Screenshot 2025-01-05 134543](https://github.com/user-attachments/assets/ecb3bff5-c00c-4d90-bee1-f30211375653)
 
 
 
