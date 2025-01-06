@@ -17,8 +17,8 @@ print("Columns in test data:", test_data.columns.tolist())
 train_data.columns = train_data.columns.str.strip()
 test_data.columns = test_data.columns.str.strip()
 
-# Update 'Label' to the actual target column name if necessary
-target_column = 'Label'  # Change this if the actual column name is different
+# Update 'Label' to the actual target column name if necessary,in this case it is 'label' itself
+target_column = 'Label'  
 
 if target_column not in train_data.columns:
     raise KeyError(f"Target column '{target_column}' not found in training data.")
