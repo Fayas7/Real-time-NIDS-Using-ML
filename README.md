@@ -1,5 +1,7 @@
 PROJECT: REAL TIME NETWORK INTRUSION DETECTION USING MACHINE LEARNING
 
+view in raw mode if the classification doesn't make sense
+
 
 /my_project
 │
