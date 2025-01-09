@@ -27,3 +27,9 @@ view in raw mode if the classification doesn't make sense
         ├── logo.png                   # Logo image for the application.
         └── styles/                    # (Optional) Additional stylesheets.
             └── custom.css             # Custom styles for specific components.
+
+
+
+
+    To create model:run command: python train.py
+    To run program and to redirect to FASTAPI:run command:python main.py
