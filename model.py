@@ -1,11 +1,10 @@
-# model.py
-
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 from sklearn.preprocessing import LabelEncoder
 from imblearn.over_sampling import SMOTE
 from utils import save_model, load_model
+import numpy as np
 
 def load_data():
     """Load the preprocessed training data and encode labels."""
@@ -51,6 +50,8 @@ def train_model():
 
     print("Model trained and saved successfully.")
 
+from sklearn.preprocessing import label_binarize
+
 def evaluate_model():
     """Evaluate the model on the test dataset."""
     # Load your test data
@@ -66,7 +67,27 @@ def evaluate_model():
 
     # Make predictions
     y_pred = model.predict(X_test)
+    y_pred_proba = model.predict_proba(X_test)
 
-    # Print evaluation metrics
-    print(confusion_matrix(y_test_encoded, y_pred))
-    print(classification_report(y_test_encoded, y_pred))
+    # Identify valid classes (classes present in the test set)
+    valid_classes = np.unique(y_test_encoded)
+
+    # Filter predictions and true labels for valid classes
+    y_test_filtered = [y_true for y_true in y_test_encoded if y_true in valid_classes]
+    y_pred_filtered = [y_pred[i] for i, y_true in enumerate(y_test_encoded) if y_true in valid_classes]
+
+    # Confusion matrix and classification report
+    print("Confusion Matrix:")
+    print(confusion_matrix(y_test_filtered, y_pred_filtered))
+
+    print("\nClassification Report:")
+    print(classification_report(y_test_filtered, y_pred_filtered, zero_division=0))
+
+    # Compute ROC-AUC for valid classes (if probabilities are available)
+    try:
+        y_test_bin = label_binarize(y_test_filtered, classes=valid_classes)
+        roc_auc = roc_auc_score(y_test_bin, y_pred_proba[:, valid_classes], average="macro", multi_class="ovo")
+        print(f"\nMacro-Average ROC-AUC Score: {roc_auc:.2f}")
+    except Exception as e:
+        print(f"\nROC-AUC Score computation failed: {e}")
+
