@@ -1,15 +1,27 @@
 import logging
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+from contextlib import asynccontextmanager
 import pandas as pd
 import joblib
 from datetime import datetime, timedelta
 import subprocess
 import asyncio
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+import os
+from pydantic import BaseModel
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging.info("Starting real-time intrusion detection...")
+    yield  # This is where the application runs
+    logging.info("Shutting down intrusion detection system...")
+
+app = FastAPI(lifespan=lifespan)
+
+# Ensure the frontend directory exists
+if not os.path.exists("frontend"):
+    os.makedirs("frontend")
 
 # Mount static files
 app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
@@ -19,14 +31,18 @@ logging.basicConfig(level=logging.INFO, filename='intrusion_logs.txt', filemode=
 
 # Load the model and label encoder
 try:
-    model = joblib.load('model.joblib')
-    label_encoder = joblib.load('label_encoder.joblib')
+    MODEL_PATH = os.getenv('MODEL_PATH', 'model.joblib')
+    LABEL_ENCODER_PATH = os.getenv('LABEL_ENCODER_PATH', 'label_encoder.joblib')
+    model = joblib.load(MODEL_PATH)
+    label_encoder = joblib.load(LABEL_ENCODER_PATH)
 except FileNotFoundError as e:
     logging.error("Model or label encoder file not found: %s", e)
     raise
 
+# Configuration
+INTERFACE_ID = os.getenv('INTERFACE_ID', '18')
 START_TIME = datetime.now()
-END_TIME = START_TIME + timedelta(hours=2)
+END_TIME = START_TIME + timedelta(minutes=2)
 
 class NetworkPacket(BaseModel):
     src_ip: str
@@ -45,12 +61,13 @@ def is_within_time_window():
 def capture_and_extract_features():
     command = [
         r"C:\\Program Files\\Wireshark\\tshark.exe",
-        '-i', '18', 
+        '-i', INTERFACE_ID,
         '-T', 'fields',
         '-e', 'ip.src', '-e', 'ip.dst', '-e', 'tcp.srcport',
         '-e', 'tcp.dstport', '-e', 'udp.srcport', '-e', 'udp.dstport',
         '-e', 'frame.len', '-e', 'frame.time_epoch'
     ]
+    process = None
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         while True:
@@ -58,9 +75,16 @@ def capture_and_extract_features():
             if output == b"" and process.poll() is not None:
                 break
             if output:
-                yield output.decode('utf-8').strip().split('\t')
+                output_features = output.decode('utf-8').strip().split('\t')
+                if len(output_features) >= 8:
+                    yield output_features
+                else:
+                    logging.warning("Incomplete packet data: %s", output_features)
     except Exception as e:
         logging.exception("Error during packet capture: %s", e)
+    finally:
+        if process:
+            process.terminate()
 
 def preprocess_features(features):
     try:
@@ -75,24 +99,26 @@ def preprocess_features(features):
         raise
 
 async def detect_intrusions():
-    for features in capture_and_extract_features():
-        if not is_within_time_window():
-            logging.info("Time window ended. Stopping detection.")
-            break
-        processed_features = preprocess_features(features)
-        try:
-            prediction = model.predict(processed_features)
-            if prediction == 'anomaly':
-                logging.info("Intrusion detected! Features: %s", processed_features.to_dict(orient='records'))
-            else:
-                logging.info("Normal traffic detected. Features: %s", processed_features.to_dict(orient='records'))
-        except Exception as e:
-            logging.exception("Error during prediction: %s", e)
+    while True:
+        for features in capture_and_extract_features():
+            if not is_within_time_window():
+                logging.info("Time window ended. Stopping detection.")
+                return
+            processed_features = preprocess_features(features)
+            try:
+                prediction = model.predict(processed_features)[0]
+                prediction_label = label_encoder.inverse_transform([prediction])[0]
+                if prediction_label == 'anomaly':
+                    logging.info("Intrusion detected! Features: %s", processed_features.to_dict(orient='records'))
+                else:
+                    logging.info("Normal traffic detected. Features: %s", processed_features.to_dict(orient='records'))
+            except Exception as e:
+                logging.exception("Error during prediction: %s", e)
+            await asyncio.sleep(0.01)
 
-@app.on_event("startup")
-async def startup_event():
-    logging.info("Starting real-time intrusion detection...")
-    asyncio.create_task(detect_intrusions())
+@app.get("/")
+async def read_root():
+    return RedirectResponse(url="/frontend/index.html")  # Redirect to index.html
 
 @app.post("/network-data/")
 async def receive_network_data(packet: NetworkPacket, background_tasks: BackgroundTasks):
@@ -106,8 +132,9 @@ def process_packet(packet: NetworkPacket):
     ]
     processed_features = preprocess_features(features)
     try:
-        prediction = model.predict(processed_features)
-        if prediction == 'anomaly':
+        prediction = model.predict(processed_features)[0]
+        prediction_label = label_encoder.inverse_transform([prediction])[0]
+        if prediction_label == 'anomaly':
             logging.info("Intrusion detected! Features: %s", processed_features.to_dict(orient='records'))
         else:
             logging.info("Normal traffic detected. Features: %s", processed_features.to_dict(orient='records'))
