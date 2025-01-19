@@ -71,7 +71,7 @@ def detect_intrusions():
 
 if __name__ == "__main__":
     detect_intrusions()'''
-
+'''
 import logging
 import pandas as pd
 import joblib
@@ -112,10 +112,8 @@ def capture_and_extract_features():
         '-e', 'frame.len',
         '-e', 'frame.time_epoch'
     ]
-
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
         # Read output line by line
         while True:
             output = process.stdout.readline()
@@ -163,4 +161,5 @@ def detect_intrusions():
 if __name__ == "__main__":
     logging.info("Starting real-time intrusion detection...")
     detect_intrusions()
+'''
 
