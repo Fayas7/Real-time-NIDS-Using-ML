@@ -22,7 +22,7 @@ view in raw mode if the classification doesn't make sense
 └── /frontend
     ├── index.html                     # Main HTML file for the web application.
     ├── styles.css                     # CSS file for styling the web application.
-    ├── app.js                         # JavaScript file for handling user interactions and API calls.
+    ├── script.js                         # JavaScript file for handling user interactions and API calls.
     └── /assets                        # Directory for static assets (images, fonts, etc.).
         ├── logo.png                   # Logo image for the application.
         └── styles/                    # (Optional) Additional stylesheets.
