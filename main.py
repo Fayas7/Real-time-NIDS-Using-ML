@@ -1,146 +1,127 @@
 import logging
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import pandas as pd
 import joblib
 from datetime import datetime, timedelta
-import subprocess
 import asyncio
 import os
+import json
 from pydantic import BaseModel
+from scapy.all import sniff, IP, TCP, UDP
+import threading
+from queue import Queue
+
+# Add WebSocket connections store
+active_connections = []
+packet_queue = Queue()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.info("Starting real-time intrusion detection...")
-    yield  # This is where the application runs
+    yield
     logging.info("Shutting down intrusion detection system...")
 
 app = FastAPI(lifespan=lifespan)
 
-# Ensure the frontend directory exists
-if not os.path.exists("frontend"):
-    os.makedirs("frontend")
-
-# Mount static files
-app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, filename='intrusion_logs.txt', filemode='w', format='%(asctime)s - %(message)s')
-
-# Load the model and label encoder
-try:
-    MODEL_PATH = os.getenv('MODEL_PATH', 'model.joblib')
-    LABEL_ENCODER_PATH = os.getenv('LABEL_ENCODER_PATH', 'label_encoder.joblib')
-    model = joblib.load(MODEL_PATH)
-    label_encoder = joblib.load(LABEL_ENCODER_PATH)
-except FileNotFoundError as e:
-    logging.error("Model or label encoder file not found: %s", e)
-    raise
-
-# Configuration
-INTERFACE_ID = os.getenv('INTERFACE_ID', '18')
-START_TIME = datetime.now()
-END_TIME = START_TIME + timedelta(minutes=2)
-
-class NetworkPacket(BaseModel):
-    src_ip: str
-    dst_ip: str
-    tcp_src_port: int
-    tcp_dst_port: int
-    udp_src_port: int
-    udp_dst_port: int
-    frame_len: int
-    frame_time_epoch: float
-
-def is_within_time_window():
-    current_time = datetime.now()
-    return START_TIME <= current_time <= END_TIME
-
-def capture_and_extract_features():
-    command = [
-        r"C:\\Program Files\\Wireshark\\tshark.exe",
-        '-i', INTERFACE_ID,
-        '-T', 'fields',
-        '-e', 'ip.src', '-e', 'ip.dst', '-e', 'tcp.srcport',
-        '-e', 'tcp.dstport', '-e', 'udp.srcport', '-e', 'udp.dstport',
-        '-e', 'frame.len', '-e', 'frame.time_epoch'
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
     ]
-    process = None
+)
+
+# Mock data for testing when model is not available
+MOCK_MODE = True
+
+if not MOCK_MODE:
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        MODEL_PATH = os.getenv('MODEL_PATH', 'model.joblib')
+        LABEL_ENCODER_PATH = os.getenv('LABEL_ENCODER_PATH', 'label_encoder.joblib')
+        model = joblib.load(MODEL_PATH)
+        label_encoder = joblib.load(LABEL_ENCODER_PATH)
+    except FileNotFoundError as e:
+        logging.warning("Model files not found, running in mock mode")
+        MOCK_MODE = True
+
+def packet_callback(packet):
+    """Process captured packets and put them in the queue"""
+    if IP in packet:
+        packet_data = {
+            "ip.src": packet[IP].src,
+            "ip.dst": packet[IP].dst,
+            "tcp.srcport": packet[TCP].sport if TCP in packet else 0,
+            "tcp.dstport": packet[TCP].dport if TCP in packet else 0,
+            "udp.srcport": packet[UDP].sport if UDP in packet else 0,
+            "udp.dstport": packet[UDP].dport if UDP in packet else 0,
+            "frame.len": len(packet),
+            "frame.time_epoch": datetime.now().timestamp()
+        }
+        packet_queue.put(packet_data)
+
+def start_packet_capture():
+    """Start packet capture in a separate thread"""
+    try:
+        sniff(prn=packet_callback, store=0)
+    except Exception as e:
+        logging.error(f"Packet capture error: {e}")
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    active_connections.append(websocket)
+    logging.info("New WebSocket connection established")
+    
+    # Start packet capture in a separate thread if not already running
+    if not hasattr(app.state, "capture_thread") or not app.state.capture_thread.is_alive():
+        app.state.capture_thread = threading.Thread(target=start_packet_capture, daemon=True)
+        app.state.capture_thread.start()
+    
+    try:
         while True:
-            output = process.stdout.readline()
-            if output == b"" and process.poll() is not None:
-                break
-            if output:
-                output_features = output.decode('utf-8').strip().split('\t')
-                if len(output_features) >= 8:
-                    yield output_features
-                else:
-                    logging.warning("Incomplete packet data: %s", output_features)
-    except Exception as e:
-        logging.exception("Error during packet capture: %s", e)
-    finally:
-        if process:
-            process.terminate()
-
-def preprocess_features(features):
-    try:
-        df = pd.DataFrame([features], columns=[
-            'ip.src', 'ip.dst', 'tcp.srcport', 'tcp.dstport',
-            'udp.srcport', 'udp.dstport', 'frame.len', 'frame.time_epoch'
-        ])
-        df['frame.len'] = pd.to_numeric(df['frame.len'], errors='coerce')
-        return df
-    except Exception as e:
-        logging.exception("Error during preprocessing: %s", e)
-        raise
-
-async def detect_intrusions():
-    while True:
-        for features in capture_and_extract_features():
-            if not is_within_time_window():
-                logging.info("Time window ended. Stopping detection.")
-                return
-            processed_features = preprocess_features(features)
             try:
-                prediction = model.predict(processed_features)[0]
-                prediction_label = label_encoder.inverse_transform([prediction])[0]
-                if prediction_label == 'anomaly':
-                    logging.info("Intrusion detected! Features: %s", processed_features.to_dict(orient='records'))
-                else:
-                    logging.info("Normal traffic detected. Features: %s", processed_features.to_dict(orient='records'))
+                # Process packets from the queue
+                if not packet_queue.empty():
+                    packet_data = packet_queue.get_nowait()
+                    message = {
+                        "features": packet_data,
+                        "prediction_label": "normal" if packet_data["frame.len"] < 1000 else "anomaly",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    await websocket.send_text(json.dumps(message))
+                    logging.info(f"Packet sent: {packet_data['ip.src']} -> {packet_data['ip.dst']}")
+                
+                await asyncio.sleep(0.1)  # Small delay to prevent CPU overload
+                
             except Exception as e:
-                logging.exception("Error during prediction: %s", e)
-            await asyncio.sleep(0.01)
-
-@app.get("/")
-async def read_root():
-    return RedirectResponse(url="/frontend/index.html")  # Redirect to index.html
-
-@app.post("/network-data/")
-async def receive_network_data(packet: NetworkPacket, background_tasks: BackgroundTasks):
-    background_tasks.add_task(process_packet, packet)
-    return {"message": "Packet received and is being processed."}
-
-def process_packet(packet: NetworkPacket):
-    features = [
-        packet.src_ip, packet.dst_ip, packet.tcp_src_port, packet.tcp_dst_port,
-        packet.udp_src_port, packet.udp_dst_port, packet.frame_len, packet.frame_time_epoch
-    ]
-    processed_features = preprocess_features(features)
-    try:
-        prediction = model.predict(processed_features)[0]
-        prediction_label = label_encoder.inverse_transform([prediction])[0]
-        if prediction_label == 'anomaly':
-            logging.info("Intrusion detected! Features: %s", processed_features.to_dict(orient='records'))
-        else:
-            logging.info("Normal traffic detected. Features: %s", processed_features.to_dict(orient='records'))
+                logging.error(f"Error processing packet: {e}")
+                continue
+                
     except Exception as e:
-        logging.exception("Error during prediction: %s", e)
+        logging.error(f"WebSocket error: {e}")
+    finally:
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+        logging.info("WebSocket connection closed")
+
+# Mount static files AFTER all routes are defined
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn
+    logging.info("Starting NIDS application...")
     uvicorn.run(app, host="127.0.0.1", port=8000)
