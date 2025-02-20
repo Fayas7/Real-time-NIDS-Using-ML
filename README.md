@@ -33,3 +33,4 @@ view in raw mode if the classification doesn't make sense
 
     To create model:run command: python train.py
     To run program and to redirect to FASTAPI:run command:python main.py
+    have added a scapy.ipynb file to understand the basics opf scapy python library
