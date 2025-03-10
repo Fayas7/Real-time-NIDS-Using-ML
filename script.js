@@ -9,6 +9,36 @@ let stats = {
     }
 };
 
+// Helper function to determine intrusion type
+function analyzeIntrusion(data) {
+    const evidence = [];
+    let intrusionType = 'Unknown';
+    
+    // Check for large packet size (potential DDoS)
+    if (data.features['frame.len'] > 1500) {
+        evidence.push('Abnormally large packet size: ' + data.features['frame.len'] + ' bytes');
+        intrusionType = 'Potential DDoS Attack';
+    }
+    
+    // Check for port scanning
+    if (data.features['tcp.dstport'] === 0 && data.features['udp.dstport'] === 0) {
+        evidence.push('Port scanning behavior detected');
+        intrusionType = 'Port Scanning';
+    }
+    
+    // Check for suspicious port numbers (common attack vectors)
+    const suspiciousPorts = [21, 22, 23, 25, 53, 445, 3389];
+    if (suspiciousPorts.includes(data.features['tcp.dstport'])) {
+        evidence.push(`Suspicious destination port: ${data.features['tcp.dstport']}`);
+        intrusionType = 'Service Attack Attempt';
+    }
+
+    return {
+        type: intrusionType,
+        evidence: evidence
+    };
+}
+
 // Initialize Chart.js
 const ctx = document.getElementById('trafficChart').getContext('2d');
 const trafficChart = new Chart(ctx, {
@@ -123,15 +153,24 @@ function updateDashboard(data) {
 
     // Add alert if anomaly detected
     if (data.prediction_label === 'anomaly') {
+        const intrusionAnalysis = analyzeIntrusion(data);
         const alertsContainer = document.getElementById('alertsContainer');
         const alert = document.createElement('div');
         alert.className = 'alert';
         alert.innerHTML = `
             <strong>Intrusion Detected!</strong><br>
+            <span class="intrusion-type">Type: ${intrusionAnalysis.type}</span><br>
             Time: ${new Date().toLocaleTimeString()}<br>
             Source IP: ${data.features['ip.src']}<br>
             Destination IP: ${data.features['ip.dst']}<br>
-            Ports: ${data.features['tcp.srcport']} → ${data.features['tcp.dstport']}
+            Ports: ${data.features['tcp.srcport']} → ${data.features['tcp.dstport']}<br>
+            <div class="evidence-container">
+                <strong>Evidence:</strong>
+                <ul>
+                    ${intrusionAnalysis.evidence.map(e => `<li>${e}</li>`).join('')}
+                    <li>Packet Size: ${data.features['frame.len']} bytes</li>
+                </ul>
+            </div>
         `;
         alertsContainer.insertBefore(alert, alertsContainer.firstChild);
 

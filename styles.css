@@ -91,6 +91,28 @@ h1 {
     margin-bottom: 0;
 }
 
+.intrusion-type {
+    color: var(--danger-color);
+    font-weight: 600;
+}
+
+.evidence-container {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background-color: rgba(0, 0, 0, 0.05);
+    border-radius: 0.25rem;
+}
+
+.evidence-container ul {
+    margin-top: 0.25rem;
+    margin-left: 1.5rem;
+}
+
+.evidence-container li {
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+}
+
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
