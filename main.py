@@ -1,3 +1,4 @@
+'''
 import logging
 from fastapi import FastAPI, BackgroundTasks, WebSocket
 from fastapi.staticfiles import StaticFiles
@@ -240,4 +241,173 @@ app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
 if __name__ == "__main__":
     import uvicorn
     logging.info("Starting NIDS application...")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)'
+'''
+import pandas as pd
+import numpy as np
+import joblib
+import os
+import time
+from datetime import datetime
+
+def load_models_and_preprocessing():
+    """Load all required models and preprocessing components"""
+    models_dir = r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\models'
+    
+    # Load preprocessing components
+    scaler = joblib.load(os.path.join(models_dir, 'scaler.pkl'))
+    feature_columns = joblib.load(os.path.join(models_dir, 'feature_columns.pkl'))
+    
+    try:
+        label_encoders = joblib.load(os.path.join(models_dir, 'label_encoders.pkl'))
+    except:
+        label_encoders = {}
+    
+    # Load models
+    rf_model = joblib.load(os.path.join(models_dir, 'random_forest_model.pkl'))
+    xgb_model = joblib.load(os.path.join(models_dir, 'xgboost_model.pkl'))
+    
+    return {
+        'scaler': scaler,
+        'feature_columns': feature_columns,
+        'label_encoders': label_encoders,
+        'rf_model': rf_model,
+        'xgb_model': xgb_model
+    }
+
+def preprocess_network_data(data, components):
+    """Preprocess network data for prediction"""
+    # Ensure all required columns are present
+    for col in components['feature_columns']:
+        if col not in data.columns:
+            data[col] = 0  # Default value for missing columns
+    
+    # Select only the columns used during training
+    data = data[components['feature_columns']]
+    
+    # Handle categorical columns
+    for col, encoder in components['label_encoders'].items():
+        if col in data.columns:
+            data[col] = data[col].astype(str)
+            try:
+                data[col] = encoder.transform(data[col])
+            except:
+                # Handle unseen categories by setting them to a default value
+                data[col] = 0
+    
+    # Handle missing values
+    data = data.replace([np.inf, -np.inf], np.nan)
+    data = data.fillna(0)  # Use 0 for missing values in production
+    
+    # Scale the data
+    data_scaled = components['scaler'].transform(data)
+    
+    return data_scaled
+
+def predict_intrusion(data_scaled, components, ensemble=True):
+    """Make predictions using one or both models"""
+    start_time = time.time()
+    
+    if ensemble:
+        # Voting ensemble (majority vote)
+        rf_pred = components['rf_model'].predict(data_scaled)
+        xgb_pred = components['xgb_model'].predict(data_scaled)
+        
+        # Get probabilities for confidence
+        rf_prob = components['rf_model'].predict_proba(data_scaled)
+        xgb_prob = components['xgb_model'].predict_proba(data_scaled)
+        
+        # Average the probabilities for ensemble confidence
+        ensemble_prob = (rf_prob + xgb_prob) / 2
+        
+        # Get the class with highest average probability
+        final_pred = np.argmax(ensemble_prob, axis=1)
+        confidence = np.max(ensemble_prob, axis=1)
+    else:
+        # Just use XGBoost (often faster and similarly accurate)
+        final_pred = components['xgb_model'].predict(data_scaled)
+        prob = components['xgb_model'].predict_proba(data_scaled)
+        confidence = np.max(prob, axis=1)
+    
+    inference_time = time.time() - start_time
+    
+    return final_pred, confidence, inference_time
+
+def log_detection(pred, confidence, inference_time, data):
+    """Log detection results"""
+    log_dir = r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\logs'
+    os.makedirs(log_dir, exist_ok=True)
+    
+    log_file = os.path.join(log_dir, f'detections_{datetime.now().strftime("%Y%m%d")}.csv')
+    file_exists = os.path.isfile(log_file)
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Create log entry
+    log_data = pd.DataFrame({
+        'timestamp': [timestamp],
+        'prediction': [pred[0]],
+        'confidence': [confidence[0]],
+        'inference_time_ms': [inference_time * 1000]
+    })
+    
+    # Add any relevant original data fields
+    if 'src_ip' in data.columns:
+        log_data['src_ip'] = data['src_ip'].iloc[0]
+    if 'dst_ip' in data.columns:
+        log_data['dst_ip'] = data['dst_ip'].iloc[0]
+    
+    # Append to log file
+    log_data.to_csv(log_file, mode='a', header=not file_exists, index=False)
+
+def simulate_live_detection():
+    """Simulate live detection on test data"""
+    print("Loading models and preprocessing components...")
+    components = load_models_and_preprocessing()
+    
+    print("Loading test data for simulation...")
+    test_data = pd.read_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\test_data.csv')
+    
+    # Identify the target column (assuming the last column is the label)
+    target_column = 'Label' if 'Label' in test_data.columns else test_data.columns[-1]
+    X_test = test_data.drop(target_column, axis=1)
+    y_test = test_data[target_column]
+    
+    print("Starting simulated detection...")
+    total_samples = min(100, len(X_test))  # Use a subset for demonstration
+    
+    detected_attacks = 0
+    avg_inference_time = 0
+    
+    for i in range(total_samples):
+        # Get a single sample
+        sample = X_test.iloc[[i]]
+        
+        # Preprocess
+        sample_scaled = preprocess_network_data(sample, components)
+        
+        # Predict
+        pred, confidence, inference_time = predict_intrusion(sample_scaled, components)
+        
+        # Log
+        log_detection(pred, confidence, inference_time, sample)
+        
+        # Track stats
+        avg_inference_time += inference_time
+        if pred[0] != 0:  # Assuming 0 is normal and other values are attacks
+            detected_attacks += 1
+        
+        # Print progress
+        if (i+1) % 10 == 0:
+            print(f"Processed {i+1}/{total_samples} samples")
+    
+    # Print summary
+    avg_inference_time /= total_samples
+    print("\nSimulation complete!")
+    print(f"Total samples processed: {total_samples}")
+    print(f"Total attacks detected: {detected_attacks}")
+    print(f"Average inference time: {avg_inference_time*1000:.2f} ms")
+    print(f"Logs saved to: C:\\Users\\fayaz\\Documents\\NIDS_IMPLEMENTATION\\logs")
+
+if __name__ == "__main__":
+    simulate_live_detection()

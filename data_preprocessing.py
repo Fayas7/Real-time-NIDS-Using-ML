@@ -1,69 +1,149 @@
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+import os
+import joblib
 
-# Load the training and test datasets
-train_data = pd.read_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\train_data.csv')
-test_data = pd.read_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\test_data.csv')
+# Create required directories if they don't exist
+os.makedirs(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\models', exist_ok=True)
+os.makedirs(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\results', exist_ok=True)
+os.makedirs(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data', exist_ok=True)
 
-# Check for missing values
-print("Missing values in training data:\n", train_data.isnull().sum())
-print("Missing values in test data:\n", test_data.isnull().sum())
+# Load the original dataset (Thursday data)
+file_path_thursday = r'C:\Users\fayaz\Documents\project final year\dataset\archive\Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv'
+print(f"Loading data from {file_path_thursday}...")
+try:
+    data_thursday = pd.read_csv(file_path_thursday)
+    print(f"Thursday dataset shape: {data_thursday.shape}")
+except Exception as e:
+    print(f"Error loading Thursday data: {e}")
+    exit(1)
 
-# Check column names
-print("Columns in training data:", train_data.columns.tolist())
-print("Columns in test data:", test_data.columns.tolist())
+# Load the new dataset (Monday data)
+file_path_monday = r'C:\Users\fayaz\Documents\project final year\dataset\archive\Monday-WorkingHours.pcap_ISCX.csv'
+print(f"Loading data from {file_path_monday}...")
+try:
+    data_monday = pd.read_csv(file_path_monday)
+    print(f"Monday dataset shape: {data_monday.shape}")
+except Exception as e:
+    print(f"Error loading Monday data: {e}")
+    exit(1)
 
-# Strip whitespace from column names
-train_data.columns = train_data.columns.str.strip()
-test_data.columns = test_data.columns.str.strip()
+# Ensure both datasets have the same columns
+common_columns = set(data_thursday.columns).intersection(set(data_monday.columns))
+if len(common_columns) < len(data_thursday.columns):
+    print(f"Warning: The datasets have different columns. Using only the {len(common_columns)} common columns.")
+    # Keep only common columns in both datasets
+    data_thursday = data_thursday[list(common_columns)]
+    data_monday = data_monday[list(common_columns)]
 
-# Update 'Label' to the actual target column name if necessary,in this case it is 'label' itself
-target_column = 'Label'  
+# Combine the datasets
+print("Combining datasets...")
+data = pd.concat([data_thursday, data_monday], ignore_index=True)
+print(f"Combined dataset shape: {data.shape}")
 
-if target_column not in train_data.columns:
-    raise KeyError(f"Target column '{target_column}' not found in training data.")
+# Identify the target column (assuming the last column is the label)
+target_column = 'Label' if 'Label' in data.columns else data.columns[-1]
+print(f"Using '{target_column}' as the target column")
 
-# Prepare feature and target datasets
-X_train = train_data.drop(target_column, axis=1)
-y_train = train_data[target_column]
-X_test = test_data.drop(target_column, axis=1)
-y_test = test_data[target_column]
+# Check for NaN values in the target column
+nan_count_target = data[target_column].isna().sum()
+if nan_count_target > 0:
+    print(f"WARNING: Found {nan_count_target} NaN values in target column '{target_column}'")
+    print("Removing rows with NaN target values")
+    data = data.dropna(subset=[target_column])
+    print(f"Dataset shape after removing NaN targets: {data.shape}")
 
-# Convert to numeric to avoid FutureWarning
-X_train = X_train.apply(pd.to_numeric, errors='coerce')
-X_test = X_test.apply(pd.to_numeric, errors='coerce')
+# Handle missing values in feature columns
+print("Handling missing values in features...")
+data = data.replace([np.inf, -np.inf], np.nan)
+nan_counts = data.isna().sum()
+print(f"Columns with NaN values: {nan_counts[nan_counts > 0].to_dict()}")
 
-# Handle missing values (fill with mean for numeric columns)
-numeric_cols = X_train.select_dtypes(include=['float64', 'int64']).columns
-X_train[numeric_cols] = X_train[numeric_cols].fillna(X_train[numeric_cols].mean())
-X_test[numeric_cols] = X_test[numeric_cols].fillna(X_test[numeric_cols].mean())
+# Use mean for numerical columns with NaNs
+numerical_cols = data.select_dtypes(include=['int64', 'float64']).columns.tolist()
+for col in numerical_cols:
+    if data[col].isna().sum() > 0:
+        data[col] = data[col].fillna(data[col].mean())
 
-# Check for infinite values
-print("Infinite values in training data:\n", X_train.isin([float('inf'), float('-inf')]).sum())
-print("Infinite values in test data:\n", X_test.isin([float('inf'), float('-inf')]).sum())
+# Identify categorical columns
+categorical_cols = data.select_dtypes(include=['object']).columns.tolist()
+print(f"Categorical columns: {categorical_cols}")
 
-# Replace infinite values with NaN and fill NaN values
-X_train.replace([float('inf'), float('-inf')], pd.NA, inplace=True)
-X_train.fillna(X_train.mean(), inplace=True)  # Fill NaN values with the mean
+# Handle categorical columns
+print("Encoding categorical features...")
+label_encoders = {}
+for col in categorical_cols:
+    # Fill NaN values with 'Unknown' before encoding
+    if data[col].isna().sum() > 0:
+        data[col] = data[col].fillna('Unknown')
+    
+    label_encoders[col] = LabelEncoder()
+    data[col] = label_encoders[col].fit_transform(data[col].astype(str))
 
-X_test.replace([float('inf'), float('-inf')], pd.NA, inplace=True)
-X_test.fillna(X_test.mean(), inplace=True)  # Fill NaN values with the mean
+# Prepare features and target
+X = data.drop(target_column, axis=1)
+y = data[target_column]
 
-# Scale the features
+# Perform a final check for NaN values
+if X.isna().any().any():
+    print("WARNING: There are still NaN values in the features. Filling remaining with 0.")
+    X = X.fillna(0)
+
+if y.isna().any():
+    print("ERROR: There are still NaN values in the target column after preprocessing.")
+    print("This should not happen as we dropped those rows earlier.")
+    exit(1)
+
+# Split the data into training (80%) and testing (20%) sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y if len(np.unique(y)) < 50 else None)
+
+print(f"Training dataset size: {X_train.shape[0]} samples ({X_train.shape[0]/data.shape[0]*100:.1f}% of combined data)")
+print(f"Testing dataset size: {X_test.shape[0]} samples ({X_test.shape[0]/data.shape[0]*100:.1f}% of combined data)")
+
+# Feature scaling
+print("Scaling features...")
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
-# Finalize the training and test datasets
-X_train_final = pd.DataFrame(X_train_scaled, columns=X_train.columns)
-y_train_final = y_train.reset_index(drop=True)  # Reset index for consistency
-X_test_final = pd.DataFrame(X_test_scaled, columns=X_test.columns)
-y_test_final = y_test.reset_index(drop=True)  # Reset index for consistency
+# Final verification for NaN values (after scaling)
+if np.isnan(X_train_scaled).any() or np.isnan(X_test_scaled).any():
+    print("WARNING: NaN values detected after scaling. Replacing with zeros.")
+    X_train_scaled = np.nan_to_num(X_train_scaled)
+    X_test_scaled = np.nan_to_num(X_test_scaled)
 
-# Save the processed data
-X_train_final.to_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\X_train_processed.csv', index=False)
-y_train_final.to_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\y_train_processed.csv', index=False)
-X_test_final.to_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\X_test_processed.csv', index=False)
-y_test_final.to_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\y_test_processed.csv', index=False)
+# Save preprocessed data
+train_data = pd.DataFrame(X_train_scaled, columns=X.columns)
+train_data[target_column] = y_train
+test_data = pd.DataFrame(X_test_scaled, columns=X.columns)
+test_data[target_column] = y_test
 
-print("Data preprocessing completed and processed data saved.")
+# Final check for NaN values in assembled DataFrames
+if train_data.isna().any().any() or test_data.isna().any().any():
+    print("WARNING: NaN values still present in final data. Fixing...")
+    train_data = train_data.fillna(0)
+    test_data = test_data.fillna(0)
+
+# Create a summary of attack types and their counts
+print("\nDistribution of attack types in the combined dataset:")
+attack_distribution = data[target_column].value_counts()
+for attack, count in attack_distribution.items():
+    print(f"  {attack}: {count} samples ({count/len(data)*100:.2f}%)")
+
+train_output_path = r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\combined_train_data.csv'
+test_output_path = r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\combined_test_data.csv'
+
+train_data.to_csv(train_output_path, index=False)
+test_data.to_csv(test_output_path, index=False)
+
+# Save the column names, scaler, and label encoders for future use
+joblib.dump(scaler, r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\models\combined_scaler.pkl')
+joblib.dump(label_encoders, r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\models\combined_label_encoders.pkl')
+joblib.dump(X.columns.tolist(), r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\models\combined_feature_columns.pkl')
+
+print(f"Preprocessing complete!")
+print(f"Combined training data saved to: {train_output_path}")
+print(f"Combined testing data saved to: {test_output_path}")
+print(f"Preprocessing artifacts saved to models directory")

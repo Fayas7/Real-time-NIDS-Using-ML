@@ -1,279 +1,164 @@
 import pandas as pd
 import numpy as np
-import xgboost as xgb
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score
+import time
 import joblib
-import logging
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_recall_fscore_support
+from xgboost import XGBClassifier
 import os
-import json
-from sklearn.model_selection import train_test_split
 
-def create_model(params=None):
-    """
-    Create and return an XGBoost classifier with specified parameters.
-    
-    Args:
-        params (dict, optional): Parameters for XGBoost. Defaults to None.
-        
-    Returns:
-        xgb.XGBClassifier: An initialized XGBoost model
-    """
-    # Default parameters if none provided
-    if params is None:
-        params = {
-            'n_estimators': 100,
-            'learning_rate': 0.1,
-            'max_depth': 5,
-            'min_child_weight': 1,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'objective': 'multi:softprob',
-            'random_state': 42
-        }
-    
-    # Initialize and return the model
-    return xgb.XGBClassifier(**params)
+# Create directory for saving plots
+os.makedirs(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\results\plots', exist_ok=True)
 
-def train_and_save_model(X_train, y_train, model_dir='models', params=None, model_name='xgboost_nids'):
-    """
-    Train an XGBoost model and save it to disk.
-    
-    Args:
-        X_train (DataFrame/ndarray): Training features
-        y_train (Series/ndarray): Training labels
-        model_dir (str): Directory to save the model
-        params (dict, optional): Model parameters
-        model_name (str): Base name for the model files
-        
-    Returns:
-        tuple: (trained_model, feature_importance_dict)
-    """
-    # Create model
-    model = create_model(params)
-    
-    # Train the model
-    logging.info("Training XGBoost model...")
-    model.fit(X_train, y_train)
-    logging.info("Model training completed successfully")
-    
-    # Create directory if it doesn't exist
-    os.makedirs(model_dir, exist_ok=True)
-    
-    # Save model
-    model_path = os.path.join(model_dir, f"{model_name}.joblib")
-    joblib.dump(model, model_path)
-    logging.info(f"Model saved to {model_path}")
-    
-    # Save feature importances
-    if hasattr(model, 'feature_importances_'):
-        feature_importances = model.feature_importances_
-        if hasattr(X_train, 'columns'):
-            # If X_train is a DataFrame with column names
-            features = X_train.columns
-            importance_dict = {feature: float(importance) for feature, importance in zip(features, feature_importances)}
-        else:
-            # If X_train doesn't have column names
-            importance_dict = {f"feature_{i}": float(importance) for i, importance in enumerate(feature_importances)}
-        
-        # Save feature importances to JSON
-        importance_path = os.path.join(model_dir, f"{model_name}_feature_importance.json")
-        with open(importance_path, 'w') as f:
-            json.dump(importance_dict, f, indent=4)
-        logging.info(f"Feature importances saved to {importance_path}")
-        
-        return model, importance_dict
-    
-    return model, None
+# Load preprocessed data
+print("Loading preprocessed data...")
+train_data = pd.read_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\train_data.csv')
+test_data = pd.read_csv(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\test_data.csv')
 
-def load_model(model_path):
-    """
-    Load a model from disk.
-    
-    Args:
-        model_path (str): Path to the saved model
-        
-    Returns:
-        The loaded model
-    """
-    try:
-        model = joblib.load(model_path)
-        logging.info(f"Model loaded successfully from {model_path}")
-        return model
-    except Exception as e:
-        logging.error(f"Error loading model from {model_path}: {e}")
-        raise
+# Identify the target column (assuming the last column is the label)
+target_column = 'Label' if 'Label' in train_data.columns else train_data.columns[-1]
+print(f"Target column: {target_column}")
 
-def evaluate_model(model, X_test, y_test, class_names=None):
-    """
-    Evaluate a model on test data.
-    
-    Args:
-        model: The trained model
-        X_test (DataFrame/ndarray): Test features
-        y_test (Series/ndarray): Test labels
-        class_names (list, optional): Names of the classes
-        
-    Returns:
-        dict: Dictionary containing evaluation metrics
-    """
-    try:
-        # Make predictions
-        y_pred = model.predict(X_test)
-        
-        # Calculate metrics
-        accuracy = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred, average='weighted')
-        
-        # Generate confusion matrix
-        cm = confusion_matrix(y_test, y_pred)
-        
-        # Generate classification report
-        if class_names is not None:
-            report = classification_report(y_test, y_pred, target_names=class_names, output_dict=True)
-        else:
-            report = classification_report(y_test, y_pred, output_dict=True)
-        
-        # Log results
-        logging.info(f"Model Accuracy: {accuracy:.4f}")
-        logging.info(f"Weighted F1 Score: {f1:.4f}")
-        logging.info(f"Confusion Matrix:\n{cm}")
-        logging.info(f"Classification Report:\n{classification_report(y_test, y_pred, target_names=class_names)}")
-        
-        # Return metrics as a dictionary
-        metrics = {
-            'accuracy': float(accuracy),
-            'f1_score': float(f1),
-            'confusion_matrix': cm.tolist(),
-            'classification_report': report
-        }
-        
-        return metrics
-    
-    except Exception as e:
-        logging.error(f"Error during model evaluation: {e}")
-        raise
+# Check for NaN values in the loaded data
+train_nan_count = train_data.isna().sum().sum()
+test_nan_count = test_data.isna().sum().sum()
+if train_nan_count > 0 or test_nan_count > 0:
+    print(f"WARNING: Found NaN values in data: {train_nan_count} in training, {test_nan_count} in testing")
+    print("Filling NaN values with 0...")
+    train_data = train_data.fillna(0)
+    test_data = test_data.fillna(0)
 
-def predict_intrusion(model, data, threshold=0.5):
-    """
-    Predict network intrusions on new data.
-    
-    Args:
-        model: Trained model
-        data (DataFrame): Data to predict on
-        threshold (float): Probability threshold for binary classification
-        
-    Returns:
-        DataFrame: Original data with prediction results added
-    """
-    try:
-        # Make raw predictions
-        if hasattr(model, 'predict_proba'):
-            # Get probability predictions if available
-            probas = model.predict_proba(data)
-            predictions = model.predict(data)
-            
-            # Create results DataFrame
-            results = data.copy()
-            results['prediction'] = predictions
-            
-            # Add probability columns for each class
-            if probas.shape[1] > 2:  # Multiclass case
-                for i, col_name in enumerate(model.classes_):
-                    results[f'prob_{col_name}'] = probas[:, i]
-            else:  # Binary case
-                results['probability'] = probas[:, 1]
-                results['is_intrusion'] = results['probability'] > threshold
-        else:
-            # Just use predict if predict_proba is not available
-            predictions = model.predict(data)
-            results = data.copy()
-            results['prediction'] = predictions
-            results['is_intrusion'] = predictions != 0  # Assuming 0 is the normal class
-        
-        logging.info(f"Predictions generated for {len(data)} samples")
-        return results
-    
-    except Exception as e:
-        logging.error(f"Error during prediction: {e}")
-        raise
+# Prepare features and target
+X_train = train_data.drop(target_column, axis=1)
+y_train = train_data[target_column]
+X_test = test_data.drop(target_column, axis=1)
+y_test = test_data[target_column]
 
-def cross_validate_model(X, y, params=None, n_splits=5):
-    """
-    Perform cross-validation on the model.
-    
-    Args:
-        X (DataFrame/ndarray): Features
-        y (Series/ndarray): Target labels
-        params (dict, optional): Model parameters
-        n_splits (int): Number of cross-validation folds
-        
-    Returns:
-        dict: Cross-validation results
-    """
-    from sklearn.model_selection import cross_val_score, KFold
-    
-    # Create model
-    model = create_model(params)
-    
-    # Set up K-fold cross-validation
-    kfold = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-    
-    # Perform cross-validation
-    logging.info(f"Performing {n_splits}-fold cross-validation...")
-    cv_accuracy = cross_val_score(model, X, y, cv=kfold, scoring='accuracy')
-    cv_f1 = cross_val_score(model, X, y, cv=kfold, scoring='f1_weighted')
-    
-    # Log results
-    logging.info(f"Cross-validation accuracy: {cv_accuracy.mean():.4f} ± {cv_accuracy.std():.4f}")
-    logging.info(f"Cross-validation F1 score: {cv_f1.mean():.4f} ± {cv_f1.std():.4f}")
-    
-    # Return results
-    return {
-        'cv_accuracy_mean': float(cv_accuracy.mean()),
-        'cv_accuracy_std': float(cv_accuracy.std()),
-        'cv_f1_mean': float(cv_f1.mean()),
-        'cv_f1_std': float(cv_f1.std()),
-        'cv_accuracy_all': cv_accuracy.tolist(),
-        'cv_f1_all': cv_f1.tolist()
-    }
+# Final check for NaN values in target variables
+if y_train.isna().any():
+    print("ERROR: NaN values found in y_train. Dropping those rows...")
+    nan_indices = y_train.index[y_train.isna()]
+    X_train = X_train.drop(nan_indices)
+    y_train = y_train.drop(nan_indices)
 
-def save_performance_metrics(metrics, model_dir='models', filename='model_performance.json'):
-    """
-    Save model performance metrics to a JSON file.
-    
-    Args:
-        metrics (dict): Dictionary of metrics
-        model_dir (str): Directory to save the metrics
-        filename (str): Name of the JSON file
-    """
-    os.makedirs(model_dir, exist_ok=True)
-    metrics_path = os.path.join(model_dir, filename)
-    
-    with open(metrics_path, 'w') as f:
-        json.dump(metrics, f, indent=4)
-    
-    logging.info(f"Performance metrics saved to {metrics_path}")
+if y_test.isna().any():
+    print("ERROR: NaN values found in y_test. Dropping those rows...")
+    nan_indices = y_test.index[y_test.isna()]
+    X_test = X_test.drop(nan_indices)
+    y_test = y_test.drop(nan_indices)
 
-# If the script is run directly, perform a simple test
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+print(f"Final training dataset: {X_train.shape} with target shape: {y_train.shape}")
+print(f"Final testing dataset: {X_test.shape} with target shape: {y_test.shape}")
+
+# Check class imbalance
+print(f"Unique values in target: {y_train.unique()}")
+print(f"Target value counts:\n{y_train.value_counts()}")
+
+# Train XGBoost model
+print("\n" + "="*50)
+print("Training XGBoost model...")
+xgb_start_time = time.time()
+xgb_model = XGBClassifier(
+    n_estimators=100,
+    max_depth=8,
+    learning_rate=0.1,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42,
+    n_jobs=-1,
+    # Using class_weight parameter for imbalanced classes
+    # Not using scale_pos_weight as it caused warnings
+)
+xgb_model.fit(X_train, y_train)
+xgb_training_time = time.time() - xgb_start_time
+print(f"XGBoost model trained in {xgb_training_time:.2f} seconds")
+
+# Save the XGBoost model
+joblib.dump(xgb_model, r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\models\xgboost_model.pkl')
+print("XGBoost model saved to models directory")
+
+# Evaluate XGBoost model
+print("Evaluating XGBoost model...")
+start_time = time.time()
+y_pred = xgb_model.predict(X_test)
+inference_time = time.time() - start_time
+
+# Calculate metrics with zero_division parameter to avoid warnings
+accuracy = accuracy_score(y_test, y_pred)
+precision, recall, f1, _ = precision_recall_fscore_support(y_test, y_pred, average='weighted', zero_division=0)
+
+# Get all possible class labels from both training and test sets
+all_classes = np.unique(np.concatenate([y_train.unique(), y_test.unique(), y_pred]))
+print(f"All class labels: {all_classes}")
+
+# Generate confusion matrix
+cm = confusion_matrix(y_test, y_pred, labels=all_classes)
+
+# Print confusion matrix in a formal way
+print("\n" + "="*50)
+print("CONFUSION MATRIX:")
+print("-"*50)
+print(f"Classes: {all_classes}")
+print("-"*50)
+# Convert to DataFrame for better formatting
+cm_df = pd.DataFrame(cm, index=all_classes, columns=all_classes)
+cm_df.index.name = 'Actual'
+cm_df.columns.name = 'Predicted'
+print(cm_df)
+print("-"*50)
+print("Row values: True labels, Column values: Predicted labels")
+print("="*50)
+
+# Create confusion matrix visualization
+plt.figure(figsize=(10, 8))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+            xticklabels=all_classes, yticklabels=all_classes)
+plt.title('Confusion Matrix - XGBoost')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.tight_layout()
+plt.savefig(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\results\plots\cm_XGBoost.png')
+plt.close()
+
+# Plot feature importances
+feature_importances = pd.DataFrame({
+    'feature': X_train.columns,
+    'importance': xgb_model.feature_importances_
+}).sort_values('importance', ascending=False)
     
-    # Simple test with randomly generated data
-    logging.info("Generating test data...")
-    X = np.random.rand(1000, 10)
-    y = np.random.randint(0, 3, 1000)  # 3 classes
-    
-    # Split the data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Train and evaluate
-    logging.info("Training test model...")
-    model, _ = train_and_save_model(X_train, y_train, model_dir='test_models')
-    
-    logging.info("Evaluating test model...")
-    metrics = evaluate_model(model, X_test, y_test)
-    
-    # Save metrics
-    save_performance_metrics(metrics, model_dir='test_models')
-    
-    logging.info("Test completed successfully")
+plt.figure(figsize=(12, 8))
+sns.barplot(x='importance', y='feature', data=feature_importances.head(20))
+plt.title('Top 20 Feature Importances - XGBoost')
+plt.tight_layout()
+plt.savefig(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\results\plots\fi_XGBoost.png')
+plt.close()
+
+# Print results
+print("\n" + "="*50)
+print("XGBoost Model Results:")
+print(f"Accuracy: {accuracy*100:.2f}%")
+print(f"Precision: {precision*100:.2f}%")
+print(f"Recall: {recall*100:.2f}%")
+print(f"F1 Score: {f1*100:.2f}%")
+print(f"Training Time: {xgb_training_time:.2f} seconds")
+print(f"Inference Time: {inference_time:.2f} seconds")
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, zero_division=0))
+
+# Save detailed results to text file
+with open(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\results\xgboost_results.txt', 'w') as f:
+    f.write(f"Model: XGBoost\n")
+    f.write(f"Training time: {xgb_training_time:.2f} seconds\n")
+    f.write(f"Inference time: {inference_time:.2f} seconds\n")
+    f.write(f"Accuracy: {accuracy*100:.2f}%\n")
+    f.write(f"Precision: {precision*100:.2f}%\n")
+    f.write(f"Recall: {recall*100:.2f}%\n")
+    f.write(f"F1 Score: {f1*100:.2f}%\n")
+    f.write("\nConfusion Matrix:\n")
+    f.write(f"{cm_df.to_string()}\n\n")
+    f.write("\nClassification Report:\n")
+    f.write(classification_report(y_test, y_pred, zero_division=0))
+
+print("\nEvaluation complete!")
+print("Results and visualizations saved to results directory")
