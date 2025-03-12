@@ -67,8 +67,6 @@ xgb_model = XGBClassifier(
     colsample_bytree=0.8,
     random_state=42,
     n_jobs=-1,
-    # Using class_weight parameter for imbalanced classes
-    # Not using scale_pos_weight as it caused warnings
 )
 xgb_model.fit(X_train, y_train)
 xgb_training_time = time.time() - xgb_start_time
@@ -84,7 +82,7 @@ start_time = time.time()
 y_pred = xgb_model.predict(X_test)
 inference_time = time.time() - start_time
 
-# Calculate metrics with zero_division parameter to avoid warnings
+# Calculate metrics
 accuracy = accuracy_score(y_test, y_pred)
 precision, recall, f1, _ = precision_recall_fscore_support(y_test, y_pred, average='weighted', zero_division=0)
 
