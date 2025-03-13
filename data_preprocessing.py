@@ -10,37 +10,38 @@ os.makedirs(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\models', exist_ok=Tru
 os.makedirs(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\results', exist_ok=True)
 os.makedirs(r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data', exist_ok=True)
 
-# Load the original dataset (Thursday data)
-file_path_thursday = r'C:\Users\fayaz\Documents\project final year\dataset\archive\Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv'
-print(f"Loading data from {file_path_thursday}...")
-try:
-    data_thursday = pd.read_csv(file_path_thursday)
-    print(f"Thursday dataset shape: {data_thursday.shape}")
-except Exception as e:
-    print(f"Error loading Thursday data: {e}")
-    exit(1)
+# Define all dataset paths
+file_paths = {
+    'Thursday': r'C:\Users\fayaz\Documents\project final year\dataset\archive\Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv',
+    'Monday': r'C:\Users\fayaz\Documents\project final year\dataset\archive\Monday-WorkingHours.pcap_ISCX.csv',
+    'Wednesday': r'C:\Users\fayaz\Documents\project final year\dataset\archive\Wednesday-workingHours.pcap_ISCX.csv'
+}
 
-# Load the new dataset (Monday data)
-file_path_monday = r'C:\Users\fayaz\Documents\project final year\dataset\archive\Monday-WorkingHours.pcap_ISCX.csv'
-print(f"Loading data from {file_path_monday}...")
-try:
-    data_monday = pd.read_csv(file_path_monday)
-    print(f"Monday dataset shape: {data_monday.shape}")
-except Exception as e:
-    print(f"Error loading Monday data: {e}")
-    exit(1)
+# Load all datasets
+datasets = {}
+for day, path in file_paths.items():
+    print(f"Loading data from {path}...")
+    try:
+        datasets[day] = pd.read_csv(path)
+        print(f"{day} dataset shape: {datasets[day].shape}")
+    except Exception as e:
+        print(f"Error loading {day} data: {e}")
+        exit(1)
 
-# Ensure both datasets have the same columns
-common_columns = set(data_thursday.columns).intersection(set(data_monday.columns))
-if len(common_columns) < len(data_thursday.columns):
+# Find common columns across all datasets
+common_columns = set(datasets['Thursday'].columns)
+for day, data in datasets.items():
+    common_columns = common_columns.intersection(set(data.columns))
+
+if len(common_columns) < len(datasets['Thursday'].columns):
     print(f"Warning: The datasets have different columns. Using only the {len(common_columns)} common columns.")
-    # Keep only common columns in both datasets
-    data_thursday = data_thursday[list(common_columns)]
-    data_monday = data_monday[list(common_columns)]
+    # Keep only common columns in all datasets
+    for day in datasets:
+        datasets[day] = datasets[day][list(common_columns)]
 
-# Combine the datasets
+# Combine all datasets
 print("Combining datasets...")
-data = pd.concat([data_thursday, data_monday], ignore_index=True)
+data = pd.concat(list(datasets.values()), ignore_index=True)
 print(f"Combined dataset shape: {data.shape}")
 
 # Identify the target column (assuming the last column is the label)
@@ -126,11 +127,24 @@ if train_data.isna().any().any() or test_data.isna().any().any():
     train_data = train_data.fillna(0)
     test_data = test_data.fillna(0)
 
+# Per-dataset statistics
+print("\nSamples from each dataset:")
+for day, dataset in datasets.items():
+    print(f"  {day}: {len(dataset)} samples ({len(dataset)/len(data)*100:.2f}% of combined data)")
+
 # Create a summary of attack types and their counts
 print("\nDistribution of attack types in the combined dataset:")
 attack_distribution = data[target_column].value_counts()
 for attack, count in attack_distribution.items():
     print(f"  {attack}: {count} samples ({count/len(data)*100:.2f}%)")
+
+# Generate per-day attack type distribution
+print("\nAttack distribution by day:")
+for day, dataset in datasets.items():
+    print(f"\n{day} attack distribution:")
+    day_distribution = dataset[target_column].value_counts()
+    for attack, count in day_distribution.items():
+        print(f"  {attack}: {count} samples ({count/len(dataset)*100:.2f}% of {day} data)")
 
 train_output_path = r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\combined_train_data.csv'
 test_output_path = r'C:\Users\fayaz\Documents\NIDS_IMPLEMENTATION\data\combined_test_data.csv'
