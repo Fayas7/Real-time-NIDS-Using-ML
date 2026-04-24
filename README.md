@@ -1,4 +1,5 @@
 PROJECT: REAL TIME NETWORK INTRUSION DETECTION USING MACHINE LEARNING
+'''
 /my_project
 │
 ├── /backend
@@ -19,7 +20,8 @@ PROJECT: REAL TIME NETWORK INTRUSION DETECTION USING MACHINE LEARNING
     ├── index.html                     # Main HTML file for the web application.
     ├── styles.css                     # CSS file for styling the web application.
     ├── script.js                         # JavaScript file for handling user interactions and API calls.
-
+...
+'''
 
 
     To create model:run command: python train.py
